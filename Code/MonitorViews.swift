@@ -21,6 +21,52 @@ struct MonitorMenuView: View {
             Toggle("Sound", isOn: $model.soundEnabled)
         }
 
+        Menu("Headset settings") {
+            if let device = model.snapshot?.connectedDevice {
+                if device.capabilities.contains(HeadsetOption.sidetone.rawValue) {
+                    numericPicker("Microphone monitoring", option: .sidetone, values: [0, 32, 64, 96, 128])
+                }
+                if device.capabilities.contains(HeadsetOption.inactiveTime.rawValue) {
+                    Picker("Inactivity time", selection: settingSelection(.inactiveTime)) {
+                        Text("Never").tag(0 as Int?)
+                        ForEach([5, 15, 30, 45, 60, 90], id: \.self) { minutes in
+                            Text(intervalText(minutes)).tag(minutes as Int?)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                }
+                if device.capabilities.contains(HeadsetOption.equalizerPreset.rawValue),
+                   !device.equalizerPresets.isEmpty {
+                    Picker("Preset", selection: settingSelection(.equalizerPreset)) {
+                        ForEach(Array(device.equalizerPresets.enumerated()), id: \.offset) { index, name in
+                            Text(presetText(name)).tag(index as Int?)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                }
+                if device.capabilities.contains(HeadsetOption.microphoneMuteLEDBrightness.rawValue) {
+                    Picker("Muted microphone LED", selection: settingSelection(.microphoneMuteLEDBrightness)) {
+                        Text("Off").tag(0 as Int?)
+                        Text("Low").tag(1 as Int?)
+                        Text("Medium").tag(2 as Int?)
+                        Text("High").tag(3 as Int?)
+                    }
+                    .pickerStyle(.menu)
+                }
+                if device.capabilities.contains(HeadsetOption.microphoneVolume.rawValue) {
+                    numericPicker("Microphone gain", option: .microphoneVolume, values: [0, 32, 64, 96, 128])
+                }
+                if device.capabilities.contains(HeadsetOption.volumeLimiter.rawValue) {
+                    Picker("Volume limiter", selection: settingSelection(.volumeLimiter)) {
+                        Text("Enable").tag(1 as Int?)
+                        Text("Disable").tag(0 as Int?)
+                    }
+                    .pickerStyle(.menu)
+                }
+            }
+        }
+        .disabled(!model.isConnected || model.isApplyingSetting)
+
         Button("Refresh information") {
             Task { await model.refresh() }
         }
@@ -32,6 +78,35 @@ struct MonitorMenuView: View {
 
     private func intervalText(_ minutes: Int) -> String {
         String(format: String(localized: "%d minutes"), minutes)
+    }
+
+    private func settingSelection(_ option: HeadsetOption) -> Binding<Int?> {
+        Binding(
+            get: { model.selectedValue(for: option) },
+            set: { value in
+                guard let value else { return }
+                Task { await model.set(option, to: value) }
+            }
+        )
+    }
+
+    private func numericPicker(_ title: LocalizedStringKey, option: HeadsetOption, values: [Int]) -> some View {
+        Picker(title, selection: settingSelection(option)) {
+            ForEach(values, id: \.self) { value in
+                Text("\(value)").tag(value as Int?)
+            }
+        }
+        .pickerStyle(.menu)
+    }
+
+    private func presetText(_ name: String) -> String {
+        switch name.lowercased() {
+        case "flat": String(localized: "Flat")
+        case "bass": String(localized: "Bass")
+        case "focus": String(localized: "Focus")
+        case "smiley": String(localized: "Smiley")
+        default: name
+        }
     }
 }
 

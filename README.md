@@ -10,6 +10,8 @@ A macOS menu bar app built with SwiftUI and Swift 6.2. It reads headset informat
 
 The app appears in the menu bar and has no Dock icon. It checks for HeadsetControl at launch, queries the headset after three seconds, and refreshes every ten minutes by default. The Settings menu lets you change the interval and turn sound on or off. You can also refresh immediately, open all available device information, or quit. The interval and sound preferences persist between launches; sound is enabled by default.
 
+The Headset settings menu is available while a headset is connected. It shows only controls supported by the device: microphone monitoring, inactivity time, equalizer presets, muted microphone LED brightness, microphone gain, and volume limiter. Preset names and device capabilities come from HeadsetControl's JSON output. After a setting is applied successfully, its selected menu item is checked. HeadsetControl does not report the current values of these settings, so no item is checked until the app changes it; selections are cleared when the connected device changes or disconnects.
+
 When a headset is connected but its battery level is unavailable, the app retries every 60 seconds. After a refresh returns a battery percentage, it resumes the interval selected in Settings.
 
 The menu bar icon changes with the battery level: cyan below 20%, yellow from 20% through 49%, orange from 50% through 80%, and red above 80%. The original blue icon represents a connected headset whose battery level is unknown.

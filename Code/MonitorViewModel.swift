@@ -11,7 +11,9 @@ final class MonitorViewModel {
 
     private(set) var snapshot: HeadsetSnapshot?
     private(set) var isRefreshing = false
+    private(set) var isApplyingSetting = false
     private(set) var errorMessage: String?
+    private(set) var selectedValues: [HeadsetOption: Int] = [:]
     var refreshIntervalMinutes: Int {
         didSet {
             UserDefaults.standard.set(refreshIntervalMinutes, forKey: Self.intervalKey)
@@ -28,6 +30,7 @@ final class MonitorViewModel {
     private var refreshTask: Task<Void, Never>?
     private var started = false
     private var executablePath: String?
+    private var selectedDeviceID: String?
     private let soundPlayer = SoundPlayer()
 
     private init() {
@@ -37,6 +40,35 @@ final class MonitorViewModel {
     }
 
     var isConnected: Bool { snapshot?.connectedDevice != nil }
+
+    func selectedValue(for option: HeadsetOption) -> Int? {
+        selectedValues[option]
+    }
+
+    func set(_ option: HeadsetOption, to value: Int) async {
+        guard !isApplyingSetting,
+              let device = snapshot?.connectedDevice,
+              device.capabilities.contains(option.rawValue),
+              let path = executablePath else { return }
+        isApplyingSetting = true
+        defer { isApplyingSetting = false }
+        do {
+            try await HeadsetControlService.set(option, to: value, for: device, at: path)
+            if snapshot?.connectedDevice?.id == device.id {
+                selectedValues[option] = value
+            }
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = String(localized: "Could not change headset setting")
+            alert.informativeText = error.localizedDescription
+            alert.addButton(withTitle: String(localized: "OK"))
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            alert.runModal()
+        }
+    }
 
     var iconAssetName: String {
         guard let device = snapshot?.connectedDevice else { return "Disconnected" }
@@ -92,6 +124,11 @@ final class MonitorViewModel {
             let previousBatteryLevel = snapshot?.connectedDevice?.batteryLevel
             let newSnapshot = try await HeadsetControlService.fetch(at: path)
             snapshot = newSnapshot
+            let newDeviceID = newSnapshot.connectedDevice?.id
+            if newDeviceID != selectedDeviceID {
+                selectedValues.removeAll()
+                selectedDeviceID = newDeviceID
+            }
             errorMessage = nil
             if soundEnabled, let device = newSnapshot.connectedDevice {
                 if !wasConnected { soundPlayer.play("detection") }

@@ -7,6 +7,9 @@ struct HeadsetDevice: Sendable, Identifiable {
     let vendor: String?
     let batteryLevel: Int?
     let connected: Bool
+    let capabilities: Set<String>
+    let equalizerPresets: [String]
+    let selectionID: String?
 }
 
 struct HeadsetSnapshot: Sendable {
@@ -54,13 +57,25 @@ enum HeadsetControlService {
         return parseText(fallback)
     }
 
-    private static func run(path: String, arguments: [String]) throws -> String {
+    static func set(_ option: HeadsetOption, to value: Int, for device: HeadsetDevice, at path: String) async throws {
+        var arguments: [String] = []
+        if let selectionID = device.selectionID {
+            arguments += ["-d", selectionID]
+        }
+        arguments += [option.argument, String(value)]
+        _ = try await Task.detached(priority: .utility) {
+            try run(path: path, arguments: arguments, requireSuccess: true)
+        }.value
+    }
+
+    private static func run(path: String, arguments: [String], requireSuccess: Bool = false) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = arguments
         let pipe = Pipe()
         process.standardOutput = pipe
-        process.standardError = Pipe()
+        let errorPipe = Pipe()
+        process.standardError = errorPipe
         do { try process.run() }
         catch { throw HeadsetControlError.failed(error.localizedDescription) }
 
@@ -73,7 +88,13 @@ enum HeadsetControlService {
         let wasTimedOut = timeout.isCancelled == false && process.terminationStatus == 15
         timeout.cancel()
         if wasTimedOut { throw HeadsetControlError.timedOut }
-        guard let text = String(data: data, encoding: .utf8), !text.isEmpty else {
+        if requireSuccess && process.terminationStatus != 0 {
+            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let detail = String(data: errorData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw HeadsetControlError.failed(detail.flatMap { $0.isEmpty ? nil : $0 }
+                ?? String(localized: "HeadsetControl could not change this setting."))
+        }
+        guard let text = String(data: data, encoding: .utf8), requireSuccess || !text.isEmpty else {
             throw HeadsetControlError.failed(String(localized: "HeadsetControl returned no information."))
         }
         return text
@@ -94,13 +115,26 @@ enum HeadsetControlService {
             }
             let connected = !["disconnected", "unsupported", "error"].contains(status)
                 && (!inaccessible || validLevel != nil)
+            let vendorID = item["id_vendor"] as? String
+            let productID = item["id_product"] as? String
+            let selectionID = vendorID.flatMap { vendor in
+                productID.map { product in
+                    "\(vendor):\(product)"
+                }
+            }
+            let capabilities = Set(item["capabilities"] as? [String] ?? [])
+            let presetCount = item["equalizer_presets_count"] as? Int ?? 0
+            let presetNames = orderedPresetNames(in: output, count: presetCount)
             return HeadsetDevice(
                 id: "\(item["id_vendor"] ?? "")-\(item["id_product"] ?? "")-\(index)",
                 name: item["device"] as? String ?? item["product"] as? String ?? String(localized: "Headset"),
                 product: item["product"] as? String,
                 vendor: item["vendor"] as? String,
                 batteryLevel: validLevel,
-                connected: connected
+                connected: connected,
+                capabilities: capabilities,
+                equalizerPresets: presetNames,
+                selectionID: selectionID
             )
         }
         return HeadsetSnapshot(devices: devices, output: output, updatedAt: Date())
@@ -118,8 +152,40 @@ enum HeadsetControlService {
             && (output.range(of: #"found [1-9]\d* supported device"#, options: [.regularExpression, .caseInsensitive]) != nil || level != nil)
         let devices = detected ? [HeadsetDevice(
             id: "legacy", name: String(localized: "Headset"), product: nil, vendor: nil,
-            batteryLevel: level, connected: true
+            batteryLevel: level, connected: true,
+            capabilities: [], equalizerPresets: [], selectionID: nil
         )] : []
         return HeadsetSnapshot(devices: devices, output: output, updatedAt: Date())
+    }
+
+    private static func orderedPresetNames(in output: String, count: Int) -> [String] {
+        guard count > 0,
+              let start = output.range(of: #""equalizer_presets"\s*:\s*\{"#, options: .regularExpression),
+              let expression = try? NSRegularExpression(pattern: #""([^"\\]+)"\s*:\s*\["#) else { return [] }
+        let remainder = String(output[start.upperBound...])
+        let range = NSRange(remainder.startIndex..<remainder.endIndex, in: remainder)
+        return expression.matches(in: remainder, range: range).prefix(count).compactMap { match in
+            Range(match.range(at: 1), in: remainder).map { String(remainder[$0]) }
+        }
+    }
+}
+
+enum HeadsetOption: String, Sendable {
+    case sidetone = "CAP_SIDETONE"
+    case inactiveTime = "CAP_INACTIVE_TIME"
+    case equalizerPreset = "CAP_EQUALIZER_PRESET"
+    case microphoneMuteLEDBrightness = "CAP_MICROPHONE_MUTE_LED_BRIGHTNESS"
+    case microphoneVolume = "CAP_MICROPHONE_VOLUME"
+    case volumeLimiter = "CAP_VOLUME_LIMITER"
+
+    var argument: String {
+        switch self {
+        case .sidetone: "-s"
+        case .inactiveTime: "-i"
+        case .equalizerPreset: "-p"
+        case .microphoneMuteLEDBrightness: "--microphone-mute-led-brightness"
+        case .microphoneVolume: "--microphone-volume"
+        case .volumeLimiter: "--volume-limiter"
+        }
     }
 }
